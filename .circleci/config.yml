@@ -3,34 +3,59 @@ version: 2.1
 commands:
   destroy-environment:
     description: Destroy back-end and front-end cloudformation stacks given a workflow ID.
-    parameters:
-      # Add parameter here
     steps:
       - run:
           name: Destroy environments
           when: on_fail
           command: |
             aws cloudformation delete-stack --stack-name "udapeople-backend-${CIRCLE_WORKFLOW_ID:0:7}"
+            aws s3 rm "s3://udapeople-${CIRCLE_WORKFLOW_ID:0:7}" --recursive
             aws cloudformation delete-stack --stack-name "udapeople-frontend-${CIRCLE_WORKFLOW_ID:0:7}"
 
-#   revert-migrations:
-#     description: Revert the last migration if successfully run in the current workflow.
-#     parameters:
-#       # Add parameter here
-#     steps:
-#       - run:
-#           name: Revert migrations
-#           # Add when this will run
-#           command: |
-#             # Curl command here to see if there was a successful migration associated with the workflow id, store result in SUCCESS variable
-#             SUCCESS = 1
-#             if(( $SUCCESS==1 ));
-#             then
-#             #  cd ~/project/backend
-#             #  npm install
-#             #  Add revert code here. You can find this in the Getting Started section.
-#               exit 1
-#             fi
+  revert-migration:
+    description: rollback migration.
+    steps:
+      - run:
+          name: revert migration
+          when: on_fail
+          command: |
+            SUCCESS=$(curl --insecure https://kvdb.io/LAmTWYv9Gv9tiwtWzCX3sL/migration_${CIRCLE_WORKFLOW_ID:0:7})
+            if(( $SUCCESS==1 ));
+            then
+              cd ~/project/backend
+              npm install
+              npm run migration:revert
+            fi
+
+  install_awscli:
+    description: install aws cli v2
+    steps:
+      - run:
+          name: Install aws cli
+          command: |
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+
+  install_nodejs:
+    description: install nodejs 13
+    steps:
+      - run:
+          name: Install nodejs 13
+          command: |
+            curl -fsSL https://deb.nodesource.com/setup_13.x | sudo -E bash -
+            sudo apt install -y nodejs
+
+  install_ansible:
+    description: install ansible v2
+    steps:
+      - run:
+          name: Install ansible v2
+          command: |
+            sudo apt update
+            sudo apt install software-properties-common
+            sudo add-apt-repository --yes --update ppa:ansible/ansible
+            sudo apt install ansible
 
 jobs:
   build-frontend:
@@ -128,9 +153,10 @@ jobs:
 
   deploy-infrastructure:
     docker:
-      - image: amazon/aws-cli
+      - image: cimg/base:stable
     steps:
       - checkout
+      - install_awscli
       - run:
           name: Ensure back-end infrastructure exists
           command: |
@@ -155,10 +181,6 @@ jobs:
               --query 'Reservations[*].Instances[*].PublicIpAddress' \
               --output text >> ~/project/.circleci/ansible/inventory.txt
             cat ~/project/.circleci/ansible/inventory.txt
-      - run:
-          name: Install tar utility
-          command: |
-            yum install -y tar gzip
       - persist_to_workspace:
           root: ~/
           paths:
@@ -167,17 +189,15 @@ jobs:
 
   configure-infrastructure:
     docker:
-      - image: python:3.7-alpine3.11
+      - image: cimg/base:stable
     steps:
       - checkout
+      - install_ansible
+      - install_awscli
       - add_ssh_keys:
           fingerprints: ["c7:aa:36:4b:f6:a2:fb:bb:f2:f2:b9:0d:d1:2f:79:7d"]
       - attach_workspace:
           at: ~/
-      - run:
-          name: Install dependencies
-          command: |
-            apk add --update ansible
       - run:
           name: Configure server
           command: |
@@ -191,6 +211,7 @@ jobs:
       - image: circleci/node:13.8.0
     steps:
       - checkout
+      - install_awscli
       - run:
           name: Run migrations
           command: |
@@ -198,24 +219,22 @@ jobs:
             npm install
             npm run migrations > migrations_dump.txt
       - run:
-          name: Send migration status to kvdb.io OR memstash.io
+          name: Send migration status to kvdb.io
           command: |
             if grep -q "has been executed successfully." ~/project/backend/migrations_dump.txt
             then
-                cat ~/project/backend/migrations_dump.txt
+                curl https://kvdb.io/LAmTWYv9Gv9tiwtWzCX3sL/migration_${CIRCLE_WORKFLOW_ID:0:7} -d '1'
             fi
       - destroy-environment
+      - revert-migration
 
   deploy-frontend:
     docker:
-      - image: amazon/aws-cli
+      - image: cimg/base:stable
     steps:
       - checkout
-      - run:
-          name: Install dependencies
-          command: |
-            yum install -y tar gzip
-            curl -fsSL https://rpm.nodesource.com/setup_16.x | bash - && yum -y install nodejs
+      - install_awscli
+      - install_nodejs
       - run:
           name: Get backend url
           command: |
@@ -236,20 +255,20 @@ jobs:
             tar -czvf artifact-"${CIRCLE_WORKFLOW_ID:0:7}".tar.gz dist
             aws s3 cp dist s3://udapeople-${CIRCLE_WORKFLOW_ID:0:7} --recursive
       - destroy-environment
+      - revert-migration
+
   deploy-backend:
     docker:
-      - image: python:3.7-alpine3.11
+      - image: cimg/base:stable
     steps:
       - checkout
+      - install_awscli
+      - install_nodejs
+      - install_ansible
       - add_ssh_keys:
           fingerprints: ["c7:aa:36:4b:f6:a2:fb:bb:f2:f2:b9:0d:d1:2f:79:7d"]
       - attach_workspace:
           at: ~/
-      - run:
-          name: Install dependencies
-          command: |
-            apk add --update ansible
-            apk add --update nodejs npm
       - run:
           name: Deploy backend
           command: |
@@ -263,17 +282,16 @@ jobs:
             echo "Contents  of the inventory.txt file is -------"
             cat inventory.txt
             ansible-playbook -i inventory.txt deploy-backend.yml
-      # Here's where you will add some code to rollback on failure
+      - destroy-environment
+      - revert-migration
 
   smoke-test:
-    docker:
-      - image: python:3.7-alpine3.11
+   docker:
+      - image: cimg/base:stable
     steps:
       - checkout
-      - run:
-          name: Install dependencies
-          command: |
-            # your code here
+      - install_awscli
+      - install_nodejs
       - run:
           name: Get backend url
           command: |
@@ -305,7 +323,8 @@ jobs:
             else
               return 1
             fi
-      # Here's where you will add some code to rollback on failure
+      - destroy-environment
+      - revert-migration
 
 #   cloudfront-update:
 #     docker:
