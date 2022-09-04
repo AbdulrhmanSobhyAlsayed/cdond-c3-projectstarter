@@ -212,7 +212,12 @@ jobs:
     steps:
       - checkout
       - install_awscli
-      - revert-migration
+      - run:
+          name: revert migrations
+          command: |
+            cd backend
+            npm install
+            npm run migration:revert
       - run:
           name: Run migrations
           command: |
@@ -321,8 +326,8 @@ jobs:
             else
               return 1
             fi
-      - destroy-environment
-      - revert-migration
+      # - destroy-environment
+      # - revert-migration
 
   # cloudfront-update:
   #   docker:
