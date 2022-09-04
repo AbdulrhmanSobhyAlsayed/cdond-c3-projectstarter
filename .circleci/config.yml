@@ -19,8 +19,7 @@ commands:
           name: revert migration
           when: on_fail
           command: |
-            SUCCESS=$(curl --insecure https://kvdb.io/LAmTWYv9Gv9tiwtWzCX3sL/migration_${CIRCLE_WORKFLOW_ID:0:7})
-            if(( $SUCCESS==1 ));
+            if curl --insecure https://kvdb.io/LAmTWYv9Gv9tiwtWzCX3sL/migration_${CIRCLE_WORKFLOW_ID:0:7}
             then
                 cd ~/project/backend
                 npm install
@@ -212,12 +211,12 @@ jobs:
     steps:
       - checkout
       - install_awscli
-      - run:
-          name: revert migrations
-          command: |
-            cd backend
-            npm install
-            npm run migrations:revert
+      # - run:
+      #     name: revert migrations
+      #     command: |
+      #       cd backend
+      #       npm install
+      #       npm run migrations:revert
       - run:
           name: Run migrations
           command: |
